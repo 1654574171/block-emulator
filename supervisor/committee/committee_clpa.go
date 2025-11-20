@@ -19,6 +19,7 @@ import (
 	"time"
 )
 
+// clpa 版本使用pendingtx进行分析
 // CLPA committee operations
 type CLPACommitteeModule struct {
 	csvPath      string
@@ -38,8 +39,9 @@ type CLPACommitteeModule struct {
 	sl *supervisor_log.SupervisorLog
 
 	// control components
-	Ss          *signal.StopSignal // to control the stop message sending
-	IpNodeTable map[uint64]map[uint64]string
+	Ss            *signal.StopSignal // to control the stop message sending
+	IpNodeTable   map[uint64]map[uint64]string
+	PendingTxList map[uint64]*core.Transaction
 }
 
 func NewCLPACommitteeModule(Ip_nodeTable map[uint64]map[uint64]string, Ss *signal.StopSignal, sl *supervisor_log.SupervisorLog, csvFilePath string, dataNum, batchNum, clpaFrequency int) *CLPACommitteeModule {
@@ -58,6 +60,7 @@ func NewCLPACommitteeModule(Ip_nodeTable map[uint64]map[uint64]string, Ss *signa
 		Ss:                  Ss,
 		sl:                  sl,
 		curEpoch:            0,
+		PendingTxList:       make(map[uint64]*core.Transaction),
 	}
 }
 
@@ -146,6 +149,13 @@ func (ccm *CLPACommitteeModule) MsgSendingControl() {
 			defer atomic.StoreInt32(&clpaRunning, 0) // 结束后允许下一次 CLPA
 
 			ccm.clpaLock.Lock()
+			ccm.sl.Slog.Println("pending tx number:", len(ccm.PendingTxList))
+
+			//遍历PendingTxList，更新clpaGraph
+			for _, tx := range ccm.PendingTxList {
+				ccm.clpaGraph.AddEdge(partition.Vertex{Addr: tx.Sender}, partition.Vertex{Addr: tx.Recipient})
+			}
+
 			mmap, _ := ccm.clpaGraph.CLPA_Partition()
 
 			ccm.clpaMapSend(mmap)
@@ -176,6 +186,7 @@ func (ccm *CLPACommitteeModule) MsgSendingControl() {
 		if tx, ok := data2tx(data, uint64(ccm.nowDataNum)); ok {
 			txlist = append(txlist, tx)
 			ccm.nowDataNum++
+
 		} else {
 			continue
 		}
@@ -186,6 +197,11 @@ func (ccm *CLPACommitteeModule) MsgSendingControl() {
 			if ccm.clpaLastRunningTime.IsZero() {
 				ccm.clpaLastRunningTime = time.Now()
 			}
+			ccm.clpaLock.Lock()
+			for tx := range txlist {
+				ccm.PendingTxList[txlist[tx].Nonce] = txlist[tx]
+			}
+			ccm.clpaLock.Unlock()
 
 			// 正常注入交易（主 goroutine 内顺序执行）
 			ccm.txSending(txlist)
@@ -193,6 +209,7 @@ func (ccm *CLPACommitteeModule) MsgSendingControl() {
 			// reset the variants about tx sending
 			txlist = make([]*core.Transaction, 0)
 			ccm.Ss.StopGap_Reset()
+			ccm.sl.Slog.Println("already sending tx number:", ccm.nowDataNum)
 		}
 
 		// 尝试异步触发 CLPA（不会阻塞交易注入）
@@ -244,12 +261,14 @@ func (ccm *CLPACommitteeModule) HandleBlockInfo(b *message.BlockInfoMsg) {
 	if b.BlockBodyLength == 0 {
 		return
 	}
+	//从pendingtx中移除已经执行完的交易
+
 	ccm.clpaLock.Lock()
 	for _, tx := range b.InnerShardTxs {
-		ccm.clpaGraph.AddEdge(partition.Vertex{Addr: tx.Sender}, partition.Vertex{Addr: tx.Recipient})
+		delete(ccm.PendingTxList, tx.Nonce)
 	}
 	for _, r2tx := range b.Relay2Txs {
-		ccm.clpaGraph.AddEdge(partition.Vertex{Addr: r2tx.Sender}, partition.Vertex{Addr: r2tx.Recipient})
+		delete(ccm.PendingTxList, r2tx.Nonce)
 	}
 	ccm.clpaLock.Unlock()
 }

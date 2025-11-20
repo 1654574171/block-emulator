@@ -19,7 +19,7 @@
   "RelayWithMerkleProof": 0,
   
   "DatasetFile": "./selectedTxs_300K.csv",
-  "ReconfigTimeGap": 15,
+  "ReconfigTimeGap":50,
 
   "Delay": -1,
   "JitterRange": -1,
