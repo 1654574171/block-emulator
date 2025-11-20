@@ -73,8 +73,11 @@ func (p *PbftConsensusNode) Propose() {
 				}
 				msg_send := message.MergeMessage(message.CPrePrepare, ppbyte)
 				networks.Broadcast(p.RunningNode.IPaddr, p.getNeighborNodes(), msg_send)
-				networks.TcpDial(msg_send, p.RunningNode.IPaddr)
+				p.pl.Plog.Printf("S%dN%d : send the PrePrepare message.\n", p.ShardID, p.NodeID)
 				p.pbftStage.Store(2)
+				//local message handle dont use tcp
+				p.handleMessage(msg_send)
+
 			}()
 
 		case <-p.pStop:
@@ -137,7 +140,9 @@ func (p *PbftConsensusNode) handlePrePrepare(content []byte) {
 		// broadcast
 		msg_send := message.MergeMessage(message.CPrepare, prepareByte)
 		networks.Broadcast(p.RunningNode.IPaddr, p.getNeighborNodes(), msg_send)
-		networks.TcpDial(msg_send, p.RunningNode.IPaddr)
+		// networks.TcpDial(msg_send, p.RunningNode.IPaddr)
+		p.handleMessage(msg_send)
+
 		p.pl.Plog.Printf("S%dN%d : has broadcast the prepare message \n", p.ShardID, p.NodeID)
 
 		// Pbft stage add 1. It means that this round of pbft goes into the next stage, i.e., Prepare stage.
@@ -198,7 +203,9 @@ func (p *PbftConsensusNode) handlePrepare(content []byte) {
 			}
 			msg_send := message.MergeMessage(message.CCommit, commitByte)
 			networks.Broadcast(p.RunningNode.IPaddr, p.getNeighborNodes(), msg_send)
-			networks.TcpDial(msg_send, p.RunningNode.IPaddr)
+			// networks.TcpDial(msg_send, p.RunningNode.IPaddr)
+			p.handleMessage(msg_send)
+
 			p.isCommitBordcast[string(pmsg.Digest)] = true
 			p.pl.Plog.Printf("S%dN%d : commit is broadcast\n", p.ShardID, p.NodeID)
 
