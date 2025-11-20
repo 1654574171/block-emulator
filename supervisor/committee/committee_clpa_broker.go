@@ -54,7 +54,7 @@ type CLPACommitteeMod_Broker struct {
 
 func NewCLPACommitteeMod_Broker(Ip_nodeTable map[uint64]map[uint64]string, Ss *signal.StopSignal, sl *supervisor_log.SupervisorLog, csvFilePath string, dataNum, batchNum, clpaFrequency int) *CLPACommitteeMod_Broker {
 	cg := new(partition.CLPAState)
-	cg.Init_CLPAState(0.5, 100, params.ShardNum)
+	cg.Init_CLPAState(0.5, 10, params.ShardNum)
 
 	broker := new(broker.Broker)
 	broker.NewBroker(nil)
@@ -146,9 +146,61 @@ func (ccm *CLPACommitteeMod_Broker) MsgSendingControl() {
 		log.Panic(err)
 	}
 	defer txfile.Close()
+
 	reader := csv.NewReader(txfile)
 	txlist := make([]*core.Transaction, 0) // save the txs in this epoch (round)
-	clpaCnt := 0
+
+	// CLPA 相关的局部状态
+	var clpaCnt int32     // 记录已经触发过多少个 CLPA epoch
+	var clpaRunning int32 // 0: 空闲, 1: 有 CLPA goroutine 正在运行
+
+	// 封装一个“按需异步触发 CLPA”的函数
+	runCLPAIfNeeded := func() {
+		// 单分片不需要 CLPA
+		if params.ShardNum <= 1 {
+			return
+		}
+		// 还没开始计时，不触发
+		if ccm.clpaLastRunningTime.IsZero() {
+			return
+		}
+		// 频率未到，不触发
+		if time.Since(ccm.clpaLastRunningTime) < time.Duration(ccm.clpaFreq)*time.Second {
+			return
+		}
+		// 已经有一个 CLPA 在跑，避免重复触发
+		if !atomic.CompareAndSwapInt32(&clpaRunning, 0, 1) {
+			return
+		}
+
+		// 记录本次触发的 epoch 序号（拷贝到局部，避免被后续修改）
+		myEpoch := atomic.AddInt32(&clpaCnt, 1)
+
+		// 在触发时就更新“上次运行时间”，避免在 CLPA 过程中被频繁重复触发
+		ccm.clpaLastRunningTime = time.Now()
+
+		// 真正的 CLPA 在后台执行，不阻塞交易注入
+		go func(expectEpoch int32) {
+			defer atomic.StoreInt32(&clpaRunning, 0) // 结束后允许下一次 CLPA
+
+			ccm.clpaLock.Lock()
+			mmap, _ := ccm.clpaGraph.CLPA_Partition()
+
+			ccm.clpaMapSend(mmap)
+			for key, val := range mmap {
+				ccm.modifiedMap[key] = val
+			}
+			ccm.clpaReset()
+			ccm.clpaLock.Unlock()
+
+			// 等待链上 epoch 追到这次 CLPA 对应的编号
+			for atomic.LoadInt32(&ccm.curEpoch) != expectEpoch {
+				time.Sleep(time.Second)
+			}
+
+			ccm.sl.Slog.Println("Next CLPA epoch begins.", "epoch", expectEpoch)
+		}(myEpoch)
+	}
 
 	for {
 		data, err := reader.Read()
@@ -158,6 +210,7 @@ func (ccm *CLPACommitteeMod_Broker) MsgSendingControl() {
 		if err != nil {
 			log.Panic(err)
 		}
+
 		if tx, ok := data2tx(data, uint64(ccm.nowDataNum)); ok {
 			txlist = append(txlist, tx)
 			ccm.nowDataNum++
@@ -173,32 +226,15 @@ func (ccm *CLPACommitteeMod_Broker) MsgSendingControl() {
 			}
 
 			itx := ccm.dealTxByBroker(txlist)
-
-			ccm.txSending(itx)
+			ccm.txSending(itx) // 交易注入仍然在主 goroutine 内连续执行
 
 			// reset the variants about tx sending
 			txlist = make([]*core.Transaction, 0)
 			ccm.Ss.StopGap_Reset()
 		}
 
-		if params.ShardNum > 1 && !ccm.clpaLastRunningTime.IsZero() && time.Since(ccm.clpaLastRunningTime) >= time.Duration(ccm.clpaFreq)*time.Second {
-			ccm.clpaLock.Lock()
-			clpaCnt++
-			mmap, _ := ccm.clpaGraph.CLPA_Partition()
-
-			ccm.clpaMapSend(mmap)
-			for key, val := range mmap {
-				ccm.modifiedMap[key] = val
-			}
-			ccm.clpaReset()
-			ccm.clpaLock.Unlock()
-
-			for atomic.LoadInt32(&ccm.curEpoch) != int32(clpaCnt) {
-				time.Sleep(time.Second)
-			}
-			ccm.clpaLastRunningTime = time.Now()
-			ccm.sl.Slog.Println("Next CLPA epoch begins. ")
-		}
+		// 尝试异步触发 CLPA（不会阻塞）
+		runCLPAIfNeeded()
 
 		if ccm.nowDataNum == ccm.dataTotalNum {
 			break
@@ -208,24 +244,8 @@ func (ccm *CLPACommitteeMod_Broker) MsgSendingControl() {
 	// all transactions are sent. keep sending partition message...
 	for !ccm.Ss.GapEnough() { // wait all txs to be handled
 		time.Sleep(time.Second)
-		if params.ShardNum > 1 && time.Since(ccm.clpaLastRunningTime) >= time.Duration(ccm.clpaFreq)*time.Second {
-			ccm.clpaLock.Lock()
-			clpaCnt++
-			mmap, _ := ccm.clpaGraph.CLPA_Partition()
-
-			ccm.clpaMapSend(mmap)
-			for key, val := range mmap {
-				ccm.modifiedMap[key] = val
-			}
-			ccm.clpaReset()
-			ccm.clpaLock.Unlock()
-
-			for atomic.LoadInt32(&ccm.curEpoch) != int32(clpaCnt) {
-				time.Sleep(time.Second)
-			}
-			ccm.clpaLastRunningTime = time.Now()
-			ccm.sl.Slog.Println("Next CLPA epoch begins. ")
-		}
+		// 这里也只做“按需异步触发”，不再阻塞等待 CLPA
+		runCLPAIfNeeded()
 	}
 }
 
@@ -248,7 +268,7 @@ func (ccm *CLPACommitteeMod_Broker) clpaMapSend(m map[string]uint64) {
 
 func (ccm *CLPACommitteeMod_Broker) clpaReset() {
 	ccm.clpaGraph = new(partition.CLPAState)
-	ccm.clpaGraph.Init_CLPAState(0.5, 100, params.ShardNum)
+	ccm.clpaGraph.Init_CLPAState(0.5, 10, params.ShardNum)
 	for key, val := range ccm.modifiedMap {
 		ccm.clpaGraph.PartitionMap[partition.Vertex{Addr: key}] = int(val)
 	}

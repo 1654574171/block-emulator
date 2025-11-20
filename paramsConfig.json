@@ -1,9 +1,9 @@
 {
-  "ConsensusMethod": 0,
+  "ConsensusMethod": 1,
   
   "PbftViewChangeTimeOut":20000,
 
-  "ExpDataRootDir": "expTest",
+  "ExpDataRootDir": "expTest-clpa",
 
   "Block_Interval": 5000,
 
@@ -19,7 +19,7 @@
   "RelayWithMerkleProof": 0,
   
   "DatasetFile": "./selectedTxs_300K.csv",
-  "ReconfigTimeGap": 50,
+  "ReconfigTimeGap": 15,
 
   "Delay": -1,
   "JitterRange": -1,
