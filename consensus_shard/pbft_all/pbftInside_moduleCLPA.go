@@ -25,6 +25,8 @@ func (cphm *CLPAPbftInsideExtraHandleMod) HandleinPropose() (bool, *message.Requ
 		for !cphm.getPartitionReady() {
 			time.Sleep(time.Second)
 		}
+		//wait a block interval , until broker2tx and relay2tx already brocast
+		time.Sleep(time.Duration(params.Block_Interval) * time.Millisecond)
 		// send accounts and txs
 		cphm.sendAccounts_and_Txs()
 		// propose a partition

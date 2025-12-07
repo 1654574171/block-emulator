@@ -33,7 +33,7 @@ func (w *rateLimitedWriter) Write(p []byte) (int, error) {
 	return w.writer.Write(p)
 }
 
-func writeToConn(connMsg []byte, conn net.Conn, limiter *rate.Limiter) {
+func writeToConn(connMsg []byte, conn net.Conn, limiter *rate.Limiter) error {
 	// Wrap the connection with rateLimitedWriter
 	rateLimitedConn := &rateLimitedWriter{writer: conn, limiter: limiter}
 
@@ -41,6 +41,7 @@ func writeToConn(connMsg []byte, conn net.Conn, limiter *rate.Limiter) {
 	_, err := rateLimitedConn.Write(connMsg)
 	if err != nil {
 		log.Println("Write error", err)
-		return
+		return err
 	}
+	return nil
 }

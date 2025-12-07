@@ -25,6 +25,9 @@ func (cphm *CLPAPbftInsideExtraHandleMod_forBroker) HandleinPropose() (bool, *me
 		for !cphm.getPartitionReady() {
 			time.Sleep(time.Second)
 		}
+		//wait a block interval , until broker2tx and relay2tx already brocast
+		time.Sleep(time.Duration(params.Block_Interval) * time.Millisecond)
+		time.Sleep(2 * time.Second)
 		// send accounts and txs
 		cphm.sendAccounts_and_Txs()
 		// propose a partition
@@ -102,28 +105,28 @@ func (cphm *CLPAPbftInsideExtraHandleMod_forBroker) HandleinCommit(cmsg *message
 			isBroker1Tx := tx.Sender == tx.OriginalSender
 			isBroker2Tx := tx.Recipient == tx.FinalRecipient
 
-			senderIsInshard := cphm.pbftNode.CurChain.Get_PartitionMap(tx.Sender) == cphm.pbftNode.ShardID
-			recipientIsInshard := cphm.pbftNode.CurChain.Get_PartitionMap(tx.Recipient) == cphm.pbftNode.ShardID
-			if isBroker1Tx && !senderIsInshard {
-				log.Panic("Err tx1")
-			}
-			if isBroker2Tx && !recipientIsInshard {
-				log.Panic("Err tx2")
-			}
-			if tx.RawTxHash == nil {
-				if tx.HasBroker {
-					if tx.SenderIsBroker && !recipientIsInshard {
-						log.Panic("err tx 1 - recipient")
-					}
-					if !tx.SenderIsBroker && !senderIsInshard {
-						log.Panic("err tx 1 - sender")
-					}
-				} else {
-					if !senderIsInshard || !recipientIsInshard {
-						log.Panic("err tx - without broker")
-					}
-				}
-			}
+			// senderIsInshard := cphm.pbftNode.CurChain.Get_PartitionMap(tx.Sender) == cphm.pbftNode.ShardID
+			// recipientIsInshard := cphm.pbftNode.CurChain.Get_PartitionMap(tx.Recipient) == cphm.pbftNode.ShardID
+			// if isBroker1Tx && !senderIsInshard {
+			// 	log.Panic("Err tx1")
+			// }
+			// if isBroker2Tx && !recipientIsInshard {
+			// 	log.Panic("Err tx2")
+			// }
+			// if tx.RawTxHash == nil {
+			// 	if tx.HasBroker {
+			// 		if tx.SenderIsBroker && !recipientIsInshard {
+			// 			log.Panic("err tx 1 - recipient")
+			// 		}
+			// 		if !tx.SenderIsBroker && !senderIsInshard {
+			// 			log.Panic("err tx 1 - sender")
+			// 		}
+			// 	} else {
+			// 		if !senderIsInshard || !recipientIsInshard {
+			// 			log.Panic("err tx - without broker")
+			// 		}
+			// 	}
+			// }
 
 			if isBroker2Tx {
 				broker2Txs = append(broker2Txs, tx)

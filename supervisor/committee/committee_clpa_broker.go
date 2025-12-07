@@ -48,8 +48,10 @@ type CLPACommitteeMod_Broker struct {
 	sl *supervisor_log.SupervisorLog
 
 	// control components
-	Ss          *signal.StopSignal // to control the stop message sending
-	IpNodeTable map[uint64]map[uint64]string
+	Ss               *signal.StopSignal // to control the stop message sending
+	IpNodeTable      map[uint64]map[uint64]string
+	alreadySendTxs   int
+	alreadyHancleTxs int
 }
 
 func NewCLPACommitteeMod_Broker(Ip_nodeTable map[uint64]map[uint64]string, Ss *signal.StopSignal, sl *supervisor_log.SupervisorLog, csvFilePath string, dataNum, batchNum, clpaFrequency int) *CLPACommitteeMod_Broker {
@@ -76,6 +78,8 @@ func NewCLPACommitteeMod_Broker(Ip_nodeTable map[uint64]map[uint64]string, Ss *s
 		Ss:                  Ss,
 		sl:                  sl,
 		curEpoch:            0,
+		alreadySendTxs:      0,
+		alreadyHancleTxs:    0,
 	}
 }
 
@@ -185,6 +189,7 @@ func (ccm *CLPACommitteeMod_Broker) MsgSendingControl() {
 
 			ccm.clpaLock.Lock()
 			mmap, _ := ccm.clpaGraph.CLPA_Partition()
+			ccm.sl.Slog.Println("migration account number:", len(mmap))
 
 			ccm.clpaMapSend(mmap)
 			for key, val := range mmap {
@@ -227,6 +232,11 @@ func (ccm *CLPACommitteeMod_Broker) MsgSendingControl() {
 
 			itx := ccm.dealTxByBroker(txlist)
 			ccm.txSending(itx) // 交易注入仍然在主 goroutine 内连续执行
+			ccm.alreadySendTxs += len(txlist)
+			ccm.sl.Slog.Printf(
+				" already send tx:%d, already handle txs number:%d \n",
+				ccm.alreadySendTxs, ccm.alreadyHancleTxs,
+			)
 
 			// reset the variants about tx sending
 			txlist = make([]*core.Transaction, 0)
@@ -288,6 +298,11 @@ func (ccm *CLPACommitteeMod_Broker) HandleBlockInfo(b *message.BlockInfoMsg) {
 	txs = append(txs, b.Broker1Txs...)
 	txs = append(txs, b.Broker2Txs...)
 	ccm.createConfirm(txs)
+	ccm.clpaLock.Lock()
+	ccm.alreadyHancleTxs += len(b.InnerShardTxs)
+	ccm.alreadyHancleTxs += len(b.Broker2Txs)
+	ccm.alreadyHancleTxs += len(b.Relay2Txs)
+	ccm.clpaLock.Unlock()
 
 	ccm.clpaLock.Lock()
 	for _, tx := range b.InnerShardTxs {

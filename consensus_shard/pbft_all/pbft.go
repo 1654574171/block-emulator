@@ -151,6 +151,16 @@ func NewPbftNode(shardID, nodeID uint64, pcc *params.ChainConfig, messageHandleT
 			pbftNode: p,
 			cdm:      ncdm,
 		}
+	case "MALPA":
+		ncdm := dataSupport.NewCLPADataSupport()
+		p.ihm = &CLPAPbftInsideExtraHandleMod{
+			pbftNode: p,
+			cdm:      ncdm,
+		}
+		p.ohm = &CLPARelayOutsideModule{
+			pbftNode: p,
+			cdm:      ncdm,
+		}
 	case "Broker":
 		p.ihm = &RawBrokerPbftExtraHandleMod{
 			pbftNode: p,
